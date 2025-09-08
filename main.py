@@ -38,7 +38,7 @@ class ScrapeRequest(BaseModel):
     delay_between_requests: int = 2
     extract_images: bool = True
     webhook_callback: Optional[HttpUrl] = None
-    extract_optionals: bool = True  # Extrai opcionais do veículo
+    extract_optionals: bool = True
 
 class ScrapeJob(BaseModel):
     job_id: str
@@ -94,7 +94,7 @@ class UniversalCarScraper:
                 '.preco-valor',
                 '.valor-venda', 
                 '.price-container .valor',
-                '[class*="preco"]',
+                '[class*="prec"]',
                 '.price-display'
             ],
             'title': [
@@ -237,7 +237,7 @@ class UniversalCarScraper:
         )
         
         context = await browser.new_context(
-            viewport={'width': 1920, 'height': 1080},  # Desktop para melhor extração
+            viewport={'width': 1920, 'height': 1080},
             locale='pt-BR',
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Safari/537.36'
         )
@@ -263,7 +263,6 @@ class UniversalCarScraper:
                         await new Promise(resolve => setTimeout(resolve, delay));
                     }
                     
-                    // Scroll até o final
                     window.scrollTo(0, document.body.scrollHeight);
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
@@ -271,17 +270,20 @@ class UniversalCarScraper:
             
             selectors = self.get_universal_selectors()['car_links']
             
+            # Preparar seletores para JavaScript
+            selectors_js = json.dumps(selectors)
+            base_url_js = base_url.replace("'", "\\'")
+            
             car_links = await page.evaluate(f"""
                 (selectors) => {{
                     const links = new Set();
-                    const baseUrl = '{base_url}';
+                    const baseUrl = '{base_url_js}';
                     
                     selectors.forEach(selector => {{
                         try {{
                             document.querySelectorAll(selector).forEach(link => {{
                                 let href = link.getAttribute('href');
                                 if (href) {{
-                                    // Converte links relativos em absolutos
                                     if (href.startsWith('/')) {{
                                         const url = new URL(baseUrl);
                                         href = url.protocol + '//' + url.host + href;
@@ -317,95 +319,85 @@ class UniversalCarScraper:
             await page.goto(url, wait_until='domcontentloaded', timeout=15000)
             await page.wait_for_timeout(3000)
             
-            # Scroll para garantir que tudo carregou
-            await page.evaluate("""
-                window.scrollTo(0, document.body.scrollHeight);
-            """)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
             await page.wait_for_timeout(1000)
             
-            selectors = self.get_universal_selectors()
-            
-            car_data = await page.evaluate(f"""
-                (selectors) => {{
-                    const cleanText = (text) => {{
+            car_data = await page.evaluate("""
+                () => {
+                    const cleanText = (text) => {
                         return text ? text.trim().replace(/\\s+/g, ' ') : 'N/A';
-                    }};
+                    };
                     
-                    const findText = (selectorList) => {{
-                        for (let selector of selectorList) {{
-                            try {{
+                    const findText = (selectorList) => {
+                        for (let selector of selectorList) {
+                            try {
                                 const element = document.querySelector(selector);
-                                if (element && element.textContent.trim()) {{
+                                if (element && element.textContent.trim()) {
                                     return cleanText(element.textContent);
-                                }}
-                            }} catch (e) {{}}
-                        }}
+                                }
+                            } catch (e) {}
+                        }
                         return 'N/A';
-                    }};
+                    };
                     
-                    const getPrice = () => {{
-                        // Busca preço específico do Autocarro
+                    const getPrice = () => {
                         const priceElements = document.querySelectorAll('.preco, .valor, .price, [class*="prec"]');
-                        for (let el of priceElements) {{
+                        for (let el of priceElements) {
                             const text = el.textContent;
-                            if (text && (text.includes('R$') || text.includes('$'))) {{
+                            if (text && (text.includes('R$') || text.includes('$'))) {
                                 return cleanText(text);
-                            }}
-                        }}
+                            }
+                        }
                         
-                        // Busca padrão no texto geral
                         const priceRegex = /R\\$\\s*[\\d.,]+/g;
                         const matches = document.body.textContent.match(priceRegex);
-                        if (matches && matches.length > 0) {{
-                            // Pega o maior valor (preço principal)
-                            return matches.reduce((a, b) => {{
+                        if (matches && matches.length > 0) {
+                            return matches.reduce((a, b) => {
                                 const aNum = parseFloat(a.replace(/[^\\d]/g, ''));
                                 const bNum = parseFloat(b.replace(/[^\\d]/g, ''));
                                 return aNum > bNum ? a : b;
-                            }});
-                        }}
+                            });
+                        }
                         return 'N/A';
-                    }};
+                    };
                     
-                    const getSpecsFromIcons = () => {{
-                        const specs = {{}};
+                    const getSpecsFromIcons = () => {
+                        const specs = {};
                         
-                        // Padrões comuns para extrair specs com ícones
                         const iconPatterns = [
-                            {{key: 'quilometragem', regex: /([\\d.,]+)\\s*km/i}},
-                            {{key: 'combustivel', values: ['flex', 'gasolina', 'etanol', 'diesel', 'gnv']}},
-                            {{key: 'cambio', values: ['automático', 'manual', 'cvt']}},
-                            {{key: 'ano', regex: /(19|20)\\d{{2}}\\/(19|20)\\d{{2}}|(19|20)\\d{{2}}/}},
-                            {{key: 'portas', regex: /(\\d)\\s*portas?/i}},
-                            {{key: 'cor', values: ['preta', 'branca', 'prata', 'vermelha', 'azul', 'cinza']}},
-                            {{key: 'placa', regex: /[A-Z]{{3}}-?\\d{{4}}|[A-Z]{{3}}\\d[A-Z]\\d{{2}}/i}}
-                        ]};
+                            {key: 'quilometragem', regex: /([\\d.,]+)\\s*km/i},
+                            {key: 'combustivel', values: ['flex', 'gasolina', 'etanol', 'diesel', 'gnv']},
+                            {key: 'cambio', values: ['automático', 'manual', 'cvt']},
+                            {key: 'ano', regex: /(19|20)\\d{2}\\/(19|20)\\d{2}|(19|20)\\d{2}/},
+                            {key: 'portas', regex: /(\\d)\\s*portas?/i},
+                            {key: 'cor', values: ['preta', 'branca', 'prata', 'vermelha', 'azul', 'cinza']},
+                            {key: 'placa', regex: /[A-Z]{3}-?\\d{4}|[A-Z]{3}\\d[A-Z]\\d{2}/i}
+                        ];
                         
                         const bodyText = document.body.textContent.toLowerCase();
                         
-                        iconPatterns.forEach(pattern => {{
-                            if (pattern.regex) {{
+                        iconPatterns.forEach(pattern => {
+                            if (pattern.regex) {
                                 const match = bodyText.match(pattern.regex);
-                                if (match) {{
+                                if (match) {
                                     specs[pattern.key] = match[0];
-                                }}
-                            }} else if (pattern.values) {{
-                                for (let value of pattern.values) {{
-                                    if (bodyText.includes(value)) {{
+                                }
+                            } else if (pattern.values) {
+                                for (let value of pattern.values) {
+                                    if (bodyText.includes(value)) {
                                         specs[pattern.key] = value;
                                         break;
-                                    }}
-                                }}
-                            }}
-                        }});
+                                    }
+                                }
+                            }
+                        });
                         
                         return specs;
-                    }};
+                    };
                     
-                    const getAllImages = () => {{
+                    const getAllImages = () => {
                         const images = new Set();
                         
-                        // Busca todas as imagens relevantes
                         const imgSelectors = [
                             'img[src*="autocarro"]',
                             '.gallery img',
@@ -416,58 +408,54 @@ class UniversalCarScraper:
                             'img[alt*="veículo"]'
                         ];
                         
-                        imgSelectors.forEach(selector => {{
-                            try {{
-                                document.querySelectorAll(selector).forEach(img => {{
+                        imgSelectors.forEach(selector => {
+                            try {
+                                document.querySelectorAll(selector).forEach(img => {
                                     let src = img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy');
                                     
                                     if (src && 
                                         (src.includes('.jpg') || src.includes('.jpeg') || 
                                          src.includes('.png') || src.includes('.webp')) &&
                                         !src.includes('logo') && !src.includes('icon') && 
-                                        !src.includes('btn') && src.length > 20) {{
+                                        !src.includes('btn') && src.length > 20) {
                                         
-                                        // Converte URL relativa para absoluta
-                                        if (src.startsWith('/')) {{
+                                        if (src.startsWith('/')) {
                                             src = window.location.origin + src;
-                                        }}
+                                        }
                                         
                                         images.add(src);
-                                    }}
-                                }});
-                            }} catch (e) {{}}
-                        }});
+                                    }
+                                });
+                            } catch (e) {}
+                        });
                         
                         return Array.from(images);
-                    }};
+                    };
                     
-                    const getOptionals = () => {{
+                    const getOptionals = () => {
                         const optionals = [];
                         
-                        // Procura seção de opcionais
                         const optionalSections = [
                             '.opcionais', '.optional', '.features', '.equipamentos',
                             '.acessorios', '.extras'
                         ];
                         
-                        optionalSections.forEach(section => {{
-                            try {{
+                        optionalSections.forEach(section => {
+                            try {
                                 const sectionEl = document.querySelector(section);
-                                if (sectionEl) {{
-                                    // Busca listas ou texto
+                                if (sectionEl) {
                                     const items = sectionEl.querySelectorAll('li, .item, span, p');
-                                    items.forEach(item => {{
+                                    items.forEach(item => {
                                         const text = cleanText(item.textContent);
-                                        if (text && text.length > 2 && text.length < 50) {{
+                                        if (text && text.length > 2 && text.length < 50) {
                                             optionals.push(text);
-                                        }}
-                                    }});
-                                }}
-                            }} catch (e) {{}}
-                        }});
+                                        }
+                                    });
+                                }
+                            } catch (e) {}
+                        });
                         
-                        // Se não encontrou, busca por padrões no texto
-                        if (optionals.length === 0) {{
+                        if (optionals.length === 0) {
                             const commonOptionals = [
                                 'air bag', 'abs', 'direção hidráulica', 'ar condicionado',
                                 'vidros elétricos', 'travas elétricas', 'alarme', 'som',
@@ -476,41 +464,38 @@ class UniversalCarScraper:
                             ];
                             
                             const bodyText = document.body.textContent.toLowerCase();
-                            commonOptionals.forEach(optional => {{
-                                if (bodyText.includes(optional)) {{
+                            commonOptionals.forEach(optional => {
+                                if (bodyText.includes(optional)) {
                                     optionals.push(optional);
-                                }}
-                            }});
-                        }}
+                                }
+                            });
+                        }
                         
-                        return [...new Set(optionals)].slice(0, 20); // Remove duplicatas e limita
-                    }};
+                        return [...new Set(optionals)].slice(0, 20);
+                    };
                     
-                    const getContactInfo = () => {{
-                        const contact = {{}};
+                    const getContactInfo = () => {
+                        const contact = {};
                         
-                        // Busca telefone
-                        const phoneRegex = /\\(?\\d{{2}}\\)?\\s*\\d{{4,5}}-?\\d{{4}}/g;
+                        const phoneRegex = /\\(?\\d{2}\\)?\\s*\\d{4,5}-?\\d{4}/g;
                         const phoneMatches = document.body.textContent.match(phoneRegex);
-                        if (phoneMatches) {{
+                        if (phoneMatches) {
                             contact.telefone = phoneMatches[0];
-                        }}
+                        }
                         
-                        // Busca WhatsApp
                         const whatsappLinks = document.querySelectorAll('a[href*="whatsapp"], a[href*="wa.me"]');
-                        if (whatsappLinks.length > 0) {{
+                        if (whatsappLinks.length > 0) {
                             const href = whatsappLinks[0].href;
-                            const phoneMatch = href.match(/\\d{{11,}}/);
-                            if (phoneMatch) {{
+                            const phoneMatch = href.match(/\\d{11,}/);
+                            if (phoneMatch) {
                                 contact.whatsapp = phoneMatch[0];
-                            }}
-                        }}
+                            }
+                        }
                         
                         return contact;
-                    }};
+                    };
                     
-                    const getTitle = () => {{
-                        // Título específico para carros
+                    const getTitle = () => {
                         const titleSelectors = [
                             'h1',
                             '.car-title', 
@@ -518,33 +503,29 @@ class UniversalCarScraper:
                             '.anuncio-titulo'
                         ];
                         
-                        for (let selector of titleSelectors) {{
+                        for (let selector of titleSelectors) {
                             const el = document.querySelector(selector);
-                            if (el && el.textContent.trim()) {{
+                            if (el && el.textContent.trim()) {
                                 return cleanText(el.textContent);
-                            }}
-                        }}
+                            }
+                        }
                         
-                        // Fallback para title da página
                         return cleanText(document.title);
-                    }};
+                    };
                     
                     const specs = getSpecsFromIcons();
                     const images = getAllImages();
                     const optionals = getOptionals();
                     const contact = getContactInfo();
                     
-                    return {{
-                        // Metadados
+                    return {
                         url: window.location.href,
                         timestamp: new Date().toISOString(),
                         domain: window.location.hostname,
                         
-                        // Dados principais
                         titulo: getTitle(),
                         preco: getPrice(),
                         
-                        // Especificações extraídas
                         marca: specs.marca || 'N/A',
                         modelo: specs.modelo || 'N/A', 
                         ano: specs.ano || 'N/A',
@@ -555,35 +536,28 @@ class UniversalCarScraper:
                         placa: specs.placa || 'N/A',
                         portas: specs.portas || 'N/A',
                         
-                        // Localização (extrair do texto se disponível)
                         cidade: 'N/A',
                         estado: 'N/A',
                         
-                        // Mídia
                         fotos: images,
                         total_fotos: images.length,
                         
-                        // Opcionais/Acessórios
                         opcionais: optionals,
                         total_opcionais: optionals.length,
                         
-                        // Contato
                         telefone: contact.telefone || 'N/A',
                         whatsapp: contact.whatsapp || 'N/A',
                         
-                        // Dados extras
-                        descricao: 'N/A', // Implementar se necessário
+                        descricao: 'N/A',
                         vendedor: 'N/A',
                         
-                        // Estatísticas
                         visitas: document.querySelector('.visitas')?.textContent || 'N/A',
                         
-                        // Status
                         extracted_at: new Date().toISOString(),
                         extraction_success: true
-                    }};
-                }}
-            """, selectors)
+                    };
+                }
+            """)
             
             # Pós-processamento para extrair marca/modelo do título
             if car_data['titulo'] != 'N/A':
@@ -612,14 +586,12 @@ class UniversalCarScraper:
             page = await context.new_page()
             
             try:
-                # Extrai links dos carros
                 car_links = await self.get_car_links(page, url)
                 
                 if not car_links:
                     self.logger.warning("Nenhum link encontrado!")
                     return []
                 
-                # Processa cada carro
                 for i, car_url in enumerate(car_links, 1):
                     self.logger.info(f"🔄 Processando {i}/{len(car_links)}: {car_url}")
                     
@@ -627,7 +599,6 @@ class UniversalCarScraper:
                     if car_data:
                         self.cars_data.append(car_data)
                     
-                    # Rate limiting
                     if i < len(car_links):
                         await asyncio.sleep(self.config.get('delay_between_requests', 2))
                 
@@ -659,7 +630,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Storage em memória para jobs (em produção usar Redis/DB)
 jobs_storage: Dict[str, ScrapeJob] = {}
 
 @app.get("/")
@@ -667,12 +637,22 @@ async def root():
     return {
         "message": "Universal Car Scraper API",
         "version": "2.0.0",
+        "status": "online",
         "endpoints": {
             "POST /scrape": "Inicia scraping de um site",
             "GET /job/{job_id}": "Status de um job",
             "GET /download/{job_id}": "Download dos resultados",
             "GET /jobs": "Lista todos os jobs"
         }
+    }
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "2.0.0",
+        "active_jobs": len([j for j in jobs_storage.values() if j.status == "running"])
     }
 
 @app.post("/scrape", response_model=Dict[str, str])
@@ -690,7 +670,6 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
     
     jobs_storage[job_id] = job
     
-    # Configuração do scraper
     config = {
         'custom_selectors': request.custom_selectors,
         'max_pages': request.max_pages,
@@ -700,7 +679,6 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
         'webhook_callback': str(request.webhook_callback) if request.webhook_callback else None
     }
     
-    # Executa em background
     background_tasks.add_task(run_scraping_job, job_id, str(request.url), config)
     
     return {
@@ -721,7 +699,6 @@ async def run_scraping_job(job_id: str, url: str, config: Dict):
         scraper = UniversalCarScraper(job_id, config)
         cars_data = await scraper.scrape_website(url)
         
-        # Salva resultado
         Path('data').mkdir(exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         result_file = f'data/scrape_{job.client_name}_{timestamp}.json'
@@ -744,7 +721,6 @@ async def run_scraping_job(job_id: str, url: str, config: Dict):
         with open(result_file, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         
-        # Atualiza job
         job.status = "completed"
         job.completed_at = datetime.now()
         job.total_found = scraper.job_stats['total_found']
@@ -752,7 +728,6 @@ async def run_scraping_job(job_id: str, url: str, config: Dict):
         job.errors = scraper.job_stats['errors']
         job.result_file = result_file
         
-        # Chama webhook se configurado
         if config.get('webhook_callback'):
             await call_webhook(config['webhook_callback'], {
                 'job_id': job_id,
@@ -904,10 +879,6 @@ async def test_selectors(request: Dict[str, Any]):
         finally:
             await browser.close()
 
-# =============================================================================
-# WEBHOOK RECEIVER EXAMPLE
-# =============================================================================
-
 @app.post("/webhook/callback")
 async def webhook_callback(data: Dict[str, Any]):
     """Exemplo de endpoint para receber callbacks"""
@@ -923,24 +894,90 @@ async def webhook_callback(data: Dict[str, Any]):
     
     return {"message": "Callback recebido com sucesso"}
 
-# =============================================================================
-# STARTUP
-# =============================================================================
+@app.post("/webhook/n8n")
+async def n8n_webhook_trigger(data: Dict[str, Any]):
+    """Endpoint específico para triggers do N8N"""
+    
+    url = data.get('url')
+    client_name = data.get('client_name', 'n8n_trigger')
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="URL é obrigatória")
+    
+    job_id = str(uuid.uuid4())
+    
+    job = ScrapeJob(
+        job_id=job_id,
+        status="pending",
+        url=url,
+        client_name=client_name,
+        created_at=datetime.now()
+    )
+    
+    jobs_storage[job_id] = job
+    
+    config = {
+        'max_pages': data.get('max_pages', 50),
+        'delay_between_requests': data.get('delay', 2),
+        'extract_images': True,
+        'extract_optionals': True,
+        'webhook_callback': f"https://n8n-scrapper.xnvwew.easypanel.host/webhook/n8n/callback"
+    }
+    
+    asyncio.create_task(run_scraping_job(job_id, url, config))
+    
+    return {
+        "job_id": job_id,
+        "status": "started", 
+        "n8n_integration": True,
+        "monitor_url": f"https://n8n-scrapper.xnvwew.easypanel.host/job/{job_id}",
+        "download_url": f"https://n8n-scrapper.xnvwew.easypanel.host/download/{job_id}"
+    }
+
+@app.post("/webhook/n8n/callback")
+async def n8n_callback_receiver(data: Dict[str, Any]):
+    """Recebe callbacks e pode retornar para N8N"""
+    print(f"📨 Callback recebido para N8N: {data}")
+    
+    return {
+        "received": True,
+        "job_id": data.get('job_id'),
+        "status": data.get('status'),
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/metrics")
+async def get_metrics():
+    """Métricas para monitoring"""
+    jobs = list(jobs_storage.values())
+    
+    return {
+        "total_jobs": len(jobs),
+        "completed_jobs": len([j for j in jobs if j.status == "completed"]),
+        "failed_jobs": len([j for j in jobs if j.status == "failed"]),
+        "running_jobs": len([j for j in jobs if j.status == "running"]),
+        "total_cars_scraped": sum(j.successfully_scraped for j in jobs),
+        "average_success_rate": sum(
+            j.successfully_scraped / max(j.total_found, 1) for j in jobs 
+            if j.total_found > 0
+        ) / max(len([j for j in jobs if j.total_found > 0]), 1) * 100 if jobs else 0
+    }
 
 @app.on_event("startup")
 async def startup_event():
     """Configurações de inicialização"""
-    # Cria diretórios necessários
     Path('data').mkdir(exist_ok=True)
     Path('logs').mkdir(exist_ok=True)
     
     print("🚗 Universal Car Scraper API iniciada!")
     print("📚 Documentação: http://localhost:8000/docs")
+    print("🏥 Health check: http://localhost:8000/health")
 
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
+        port=port,
         log_level="info"
     )
