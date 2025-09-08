@@ -1,0 +1,4 @@
+# Procure por "# .gitignore"
+__pycache__/
+*.py[cod]
+# ... resto dos padrões
