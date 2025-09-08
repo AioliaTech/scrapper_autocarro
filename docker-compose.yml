@@ -1,0 +1,5 @@
+# Procure por "# docker-compose.yml"
+version: '3.8'
+services:
+  car-scraper-api:
+# ... resto do código
